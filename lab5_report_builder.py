@@ -10,6 +10,7 @@ import numpy as np
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Pt
+from docx.oxml.ns import qn
 from PIL import Image, ImageDraw, ImageFont
 
 
@@ -45,6 +46,10 @@ def bits_to_int(bits: Sequence[int]) -> int:
     return int(bits[0]) * 2 + int(bits[1])
 
 
+def int_to_bits(value: int) -> List[int]:
+    return [(value >> 1) & 1, value & 1]
+
+
 def fmt_bits(bits: Sequence[int]) -> str:
     return "[" + ", ".join(str(int(b)) for b in bits) + "]"
 
@@ -55,6 +60,16 @@ def xor_list(a: Sequence[int], b: Sequence[int]) -> List[int]:
 
 def rand_bits(rng: np.random.Generator, n: int) -> List[int]:
     return [int(v) for v in rng.integers(0, 2, size=n)]
+
+
+def add_code_block(document: Document, text: str) -> None:
+    for line in text.splitlines():
+        p = document.add_paragraph()
+        p.paragraph_format.left_indent = Inches(0.25)
+        p.paragraph_format.space_after = Pt(0)
+        run = p.add_run(line)
+        run.font.name = "Courier New"
+        run._element.rPr.rFonts.set(qn("w:eastAsia"), "Courier New")
 
 
 def expected_output(a_bits: Sequence[int], x_bits: Sequence[int]) -> int:
@@ -346,7 +361,14 @@ def add_paragraph(document: Document, text: str, bold_prefix: str | None = None)
         p.add_run(text)
 
 
-def build_report(results: List[CaseResult], exhaustive_summary: str, sample_image: Path, summary_image: Path, verify_image: Path) -> None:
+def build_report(
+    results: List[CaseResult],
+    exhaustive_summary: str,
+    sample_image: Path,
+    summary_image: Path,
+    detail_image: Path,
+    verify_image: Path,
+) -> None:
     doc = Document()
 
     style = doc.styles["Normal"]
@@ -355,13 +377,13 @@ def build_report(results: List[CaseResult], exhaustive_summary: str, sample_imag
 
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = title.add_run("实验5 密码分享实验报告")
+    run = title.add_run("实验5 秘密分享实验报告")
     run.bold = True
     run.font.size = Pt(16)
 
     meta = doc.add_paragraph()
     meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    meta.add_run("课程: 密码分享与安全多方计算\n")
+    meta.add_run("课程: 秘密分享与安全多方计算\n")
     meta.add_run("姓名: __________   学号: __________   日期: 2026-05-17")
 
     add_heading(doc, "1. 实验目标", level=1)
@@ -372,13 +394,29 @@ def build_report(results: List[CaseResult], exhaustive_summary: str, sample_imag
     add_paragraph(doc, "Python 3 + numpy + python-docx + Pillow")
     add_paragraph(doc, "实验输入来自附件 实验5 密码分享.zip 中的 Test.py 和实验说明文档。")
 
-    add_heading(doc, "3. 实验方法", level=1)
+    add_heading(doc, "3. 运行方式", level=1)
+    add_paragraph(doc, "本次实验以附件 Test.py 为基础，另用 lab5_report_builder.py 生成截图和最终报告。")
+    add_code_block(
+        doc,
+        "python3 Test.py\npython3 lab5_report_builder.py",
+    )
+    add_paragraph(doc, "前者运行原始秘密分享协议；后者完成代表性输入验证、256 组穷举校验，并导出 docx 报告。")
+
+    add_heading(doc, "4. 核心代码说明", level=1)
+    add_paragraph(doc, "代码由 Dealer、Alice、Bob 三个类构成。Dealer 负责离线阶段，生成 Beaver 三元组并拆成 u_A/u_B、v_A/v_B、w_A/w_B。Alice 和 Bob 在在线阶段对输入做异或分片，然后按电路层逐层计算。")
+    add_code_block(
+        doc,
+        "u = u_A ⊕ u_B\nv = v_A ⊕ v_B\nw = w_A ⊕ w_B\nAND([x],[y]): d = x ⊕ u, e = y ⊕ v\nz = w ⊕ e·x ⊕ d·y ⊕ e·d",
+    )
+    add_paragraph(doc, "最终输出由 z = z_A ⊕ z_B 重构得到。")
+
+    add_heading(doc, "5. 实验方法", level=1)
     add_paragraph(doc, "本实验采用附件中的 BeDoZa 风格秘密分享协议，实现 4 比特输入的函数计算。")
     add_paragraph(doc, "输入 a 和 x 都按 2 比特一组解释，分别表示 a1、a2、x1、x2，目标函数为：")
     add_paragraph(doc, "f(a, x) = 1, 当且仅当 a1 * x1 + a2 * x2 >= 4；否则输出 0。")
     add_paragraph(doc, "为了便于复现，实验脚本固定随机种子，仅影响分片和 Beaver 三元组，不影响协议正确性。")
 
-    add_heading(doc, "4. 代表性运行结果", level=1)
+    add_heading(doc, "6. 代表性运行结果", level=1)
     table = doc.add_table(rows=1, cols=5)
     table.style = "Table Grid"
     hdr = table.rows[0].cells
@@ -397,34 +435,48 @@ def build_report(results: List[CaseResult], exhaustive_summary: str, sample_imag
 
     add_paragraph(doc, "三组代表性输入都与理论结果一致，且协议输出与明文函数一致。")
 
-    add_heading(doc, "5. 中间过程截图", level=1)
-    add_paragraph(doc, "图1 展示 sample case 的输入共享、第一层第一个与门的 Beaver 三元组、d/e 中间量，以及最终重构结果。")
+    sample_result = results[0]
+
+    add_heading(doc, "7. 第一层与门验证", level=1)
+    add_paragraph(doc, f"sample case 取 a={fmt_bits(sample_result.a_bits)}，x={fmt_bits(sample_result.x_bits)}，最终函数值为 {sample_result.output}。第一层第一个与门对应电路输入线 0 和线 4。")
+    add_paragraph(doc, f"截图中可见，该门的明文结果为 {sample_result.trace.plain_result}；Alice 端分片 z_A={sample_result.trace.z_a}，Bob 端分片 z_B={sample_result.trace.z_b}，重构后 z_A⊕z_B={sample_result.trace.reconstructed}，与明文一致。")
     doc.add_picture(str(sample_image), width=Inches(6.8))
     cap = doc.add_paragraph("图1  sample case 的中间过程")
     cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    add_paragraph(doc, "图2 展示若干代表性输入的输出对比。")
+    add_paragraph(doc, "这说明门级分片、Beaver 三元组以及 d/e 中间量都能正确恢复该门的明文输出；而整个电路继续运行后的最终输出为 1。")
+
+    add_heading(doc, "8. 穷举验证", level=1)
+    add_paragraph(doc, "由于 a1、a2、x1、x2 均取自 {0,1,2,3}，因此总输入数为 4^4 = 256。下式给出穷举验证方式：")
+    add_code_block(
+        doc,
+        "for a1 in range(4):\n    for a2 in range(4):\n        for x1 in range(4):\n            for x2 in range(4):\n                expected = int(a1 * x1 + a2 * x2 >= 4)\n                protocol = run_protocol(...)\n                assert expected == protocol",
+    )
+
+    add_paragraph(doc, "图2 展示若干代表性输入的输出对比，图3 给出穷举样例明细，图4 给出最终穷举校验结果。")
     doc.add_picture(str(summary_image), width=Inches(6.8))
     cap = doc.add_paragraph("图2  代表性输入的输出对比")
     cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    add_paragraph(doc, "图3 展示 256 组输入的穷举校验结果。")
-    doc.add_picture(str(verify_image), width=Inches(6.8))
-    cap = doc.add_paragraph("图3  穷举校验结果")
+    doc.add_picture(str(detail_image), width=Inches(6.8))
+    cap = doc.add_paragraph("图3  穷举样例明细")
     cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    add_heading(doc, "6. 实验结论", level=1)
+    add_paragraph(doc, "最终穷举结果为 Exhaustive check: 256/256 passed。")
+    doc.add_picture(str(verify_image), width=Inches(6.8))
+    cap = doc.add_paragraph("图4  穷举校验结果")
+    cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    add_heading(doc, "9. 实验结论", level=1)
     add_paragraph(doc, "1) 协议能够正确输出目标函数结果。")
     add_paragraph(doc, "2) 对全部 256 组输入做穷举验证后，协议输出与理论函数完全一致。")
     add_paragraph(doc, "3) 第一层与门的中间量 d、e、Beaver 三元组和分片值都能对上明文计算。")
-
-    add_heading(doc, "附录：验证摘要", level=1)
-    add_paragraph(doc, exhaustive_summary)
+    add_paragraph(doc, f"4) 穷举验证摘要：{exhaustive_summary}")
 
     doc.save(REPORT_PATH)
 
 
-def run_cases() -> Tuple[List[CaseResult], str, Path, Path, Path]:
+def run_cases() -> Tuple[List[CaseResult], str, Path, Path, Path, Path]:
     sample_case = ([0, 1, 1, 1], [0, 1, 0, 1], 20260517)
     summary_cases = [
         ([0, 1, 1, 1], [0, 1, 0, 1], 20260517),
@@ -475,6 +527,27 @@ def run_cases() -> Tuple[List[CaseResult], str, Path, Path, Path]:
     summary_image = ARTIFACT_DIR / "case_summary.png"
     render_text_image("\n".join(summary_lines), summary_image, title="Representative cases")
 
+    detail_cases = [
+        (0, 0, 0, 0),
+        (0, 1, 0, 1),
+        (1, 1, 1, 1),
+        (1, 3, 1, 1),
+        (2, 1, 2, 1),
+        (2, 2, 1, 2),
+        (3, 0, 3, 0),
+        (3, 3, 3, 3),
+    ]
+    detail_lines: List[str] = []
+    for idx, (a1, a2, x1, x2) in enumerate(detail_cases, start=1):
+        a_bits = int_to_bits(a1) + int_to_bits(a2)
+        x_bits = int_to_bits(x1) + int_to_bits(x2)
+        res = BeDoZaRunner(a_bits, x_bits, 400000 + idx).run()
+        detail_lines.append(
+            f"Case {idx}: a=({a1},{a2}) {fmt_bits(a_bits)}  x=({x1},{x2}) {fmt_bits(x_bits)}  expected={res.expected}  protocol={res.output}"
+        )
+    detail_image = ARTIFACT_DIR / "exhaustive_detail.png"
+    render_text_image("\n".join(detail_lines), detail_image, title="Exhaustive sample rows")
+
     verify_text = "\n".join(
         [
             exhaustive_summary,
@@ -486,12 +559,12 @@ def run_cases() -> Tuple[List[CaseResult], str, Path, Path, Path]:
     verify_image = ARTIFACT_DIR / "exhaustive_check.png"
     render_text_image(verify_text, verify_image, title="Exhaustive verification")
 
-    return results, exhaustive_summary, sample_image, summary_image, verify_image
+    return results, exhaustive_summary, sample_image, summary_image, detail_image, verify_image
 
 
 def main() -> None:
-    results, exhaustive_summary, sample_image, summary_image, verify_image = run_cases()
-    build_report(results, exhaustive_summary, sample_image, summary_image, verify_image)
+    results, exhaustive_summary, sample_image, summary_image, detail_image, verify_image = run_cases()
+    build_report(results, exhaustive_summary, sample_image, summary_image, detail_image, verify_image)
     print(f"Report written to: {REPORT_PATH}")
     print(f"Artifacts written to: {ARTIFACT_DIR}")
 
